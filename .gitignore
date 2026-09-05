@@ -1,0 +1,12 @@
+node_modules/
+.next/
+dist/
+build/
+*.log
+.DS_Store
+.env
+.env.local
+postgres_data/
+redis_data/
+*.exe
+DockerDesktopInstaller.exe

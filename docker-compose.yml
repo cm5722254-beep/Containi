@@ -1,0 +1,158 @@
+version: '3.8'
+
+# ==========================================================
+# CTN UNIVERSITY PROJECT: CONTAINERS
+# Project: Containerized E-Commerce Management System
+# Orchestration: Docker Compose Multi-Container Architecture
+# ==========================================================
+
+services:
+
+  # --------------------------------------------------------
+  # 1. NGINX REVERSE PROXY & GATEWAY SERVICE
+  # --------------------------------------------------------
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: ctn_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80" # Single Public Entry point
+    networks:
+      - app-network
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost/nginx-health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # --------------------------------------------------------
+  # 2. FRONTEND WEB APPLICATION (Next.js 14 App Router)
+  # --------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ctn_frontend
+    restart: unless-stopped
+    expose:
+      - "3000" # Isolated inside app-network, not mapped to host
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - INTERNAL_API_URL=http://backend:5000/api
+    networks:
+      - app-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # --------------------------------------------------------
+  # 3. BACKEND REST API SERVICE (Node.js + Express + TS)
+  # --------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ctn_backend
+    restart: unless-stopped
+    expose:
+      - "5000" # Isolated inside app-network, not mapped to host
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-secure_university_password_2026}@postgres:5432/${POSTGRES_DB:-ecommerce}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:-super_secret_jwt_key_ctn_containers_2026}
+      - CORS_ORIGIN=*
+    networks:
+      - app-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # --------------------------------------------------------
+  # 4. DATABASE CONTAINER (PostgreSQL 16 Relational DB)
+  # --------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: ctn_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ecommerce}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_university_password_2026}
+    volumes:
+      # Persistent named volume ensures data survives container restarts/recreation
+      - postgres_data:/var/lib/postgresql/data
+      # Initial SQL schema & demo seeds
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - app-network
+    # Port 5432 is strictly kept internal to Docker network for security
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-ecommerce}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --------------------------------------------------------
+  # 5. CACHE CONTAINER (Redis 7 In-Memory Data Store)
+  # --------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: ctn_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      # Persistent volume for Redis AOF logs
+      - redis_data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+# ==========================================================
+# DOCKER NETWORKS
+# ==========================================================
+networks:
+  app-network:
+    name: app-network
+    driver: bridge
+
+# ==========================================================
+# DOCKER VOLUMES (Persistent Storage)
+# ==========================================================
+volumes:
+  postgres_data:
+    name: postgres_data
+    driver: local
+  redis_data:
+    name: redis_data
+    driver: local
